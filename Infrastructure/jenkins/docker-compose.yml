@@ -1,0 +1,23 @@
+# docker-compose.yaml
+version: '3.8'
+
+services:
+  jenkins:
+    image: myjenkins:v1.0.0
+    build: ./
+    container_name: jenkins
+    user: jenkins
+    # restart: always
+    network_mode: "host"
+    environment:
+      - KUBECONFIG=/etc/kube-config.yml
+      # - JENKINS_OPTS='--httpPort=8008'
+    volumes:
+      - jenkins:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/local/bin/helm:/usr/local/bin/helm
+      - ${KUBECONFIG_FILE}:/etc/kube-config.yml:ro
+      - ${KUBECTL_EXEC}:/usr/bin/kubectl
+volumes:
+  jenkins:
+    name: "jenkins-data"

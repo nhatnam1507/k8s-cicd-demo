@@ -1,0 +1,111 @@
+// // gitea
+// def gitRepository = 'http://10.116.45.100:3000/phocr/test-service.git'
+// def gitBranch = 'master'
+// def gitCredential = 'gitea'	
+
+// docker
+def dockerDomain = 'phocr-registry.local.com:5000'
+def dockerArgument = '--build-arg http_proxy=http://phocr:Abcd4321@10.116.16.12:3128 --build-arg https_proxy=http://phocr:Abcd4321@10.116.16.12:3128 ./'
+def dockerImage
+
+def curlTest (url, out) {
+    echo "Running curl on ${url}"
+    def result
+    script {
+        if (out.equals('')) {
+            out = 'http_code'
+        }
+        echo "Getting ${out}"
+            result = sh (
+                returnStdout: true,
+                script: "curl --output /dev/null --silent --connect-timeout 5 --max-time 5 --retry 5 --retry-delay 5 --retry-max-time 30 --write-out \"%{${out}}\" ${url}"
+        )
+        echo "Result (${out}): ${result}"
+        if (!result.equals("200")) {
+            echo result
+            sh "exit 1"
+        }
+    }
+}
+
+pipeline { 
+    agent any 
+    
+    environment {
+        SERVICE='test-service'
+        DOCKER_REGISTRY = "http://10.116.45.100:5000/"
+        DOCKER_IMAGE = "${dockerDomain}/phocr/${SERVICE}"
+        DOCKER_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
+    }
+    
+    stages {
+        
+        // stage('Checkout source code') { 
+        //     steps { 
+        //         echo 'Checkout project'
+        //         git branch: gitBranch, credentialsId: gitCredential, url: gitRepository
+        //         sh "git reset --hard"				
+        //     }
+        // }
+        
+        stage('Build service') {
+            steps {
+                echo 'Build on agent'
+                script {
+                    dockerImage = docker.build("${DOCKER_IMAGE}:${DOCKER_TAG}", dockerArgument)
+                    dockerImage.push()
+                }
+            }
+        }
+        
+        stage('Service unit test') {
+            steps {
+                echo 'Test application healthy'
+                script {
+                    dockerImage.withRun('-p 9080:8080') {
+                        curlTest('localhost:9080/healthy', 'http_code')
+                    }
+                }
+            }
+        }
+        
+        stage('Publish') {
+            when {
+                branch 'master'
+            }
+            stages {
+                stage('Build image') {
+                    steps {
+                        echo 'Build image'
+                        script {
+                            dockerImage = docker.build("${DOCKER_IMAGE}:${DOCKER_TAG}", dockerArgument)
+                        }
+                    }
+                }
+                stage('Push to registry') {
+                    steps {
+                        echo 'Push image'
+                        script {
+                            dockerImage.tag('latest')
+                            dockerImage.push('latest')
+                        }
+                    }
+                }
+                stage('Deploy') {
+                    steps {
+                        build job: "k8s-cd", parameters: [
+                            string(name: 'SERVICE_NAME', value: "${SERVICE}"),
+                            string(name: 'IMAGE_TAG', value: "${DOCKER_TAG}")
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+    post { 
+        always { 
+            echo 'Sending reports...'
+        }
+    }
+}

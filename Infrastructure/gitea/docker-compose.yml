@@ -1,0 +1,64 @@
+version: "3.8"
+
+networks:
+    gitea:
+        external: false
+
+services:
+    server:
+        image: gitea/gitea
+        container_name: gitea
+        environment:
+            - USER_UID=1011
+            - USER_GID=1011
+            - GITEA__database__DB_TYPE=mysql
+            - GITEA__database__HOST=db:3306
+            - GITEA__database__NAME=gitea
+            - GITEA__database__USER=gitea
+            - GITEA__database__PASSWD=gitea
+            - GITEA__service__DISABLE_REGISTRATION=true
+            - GITEA__server__SSH_PORT=${SSH_PORT}
+        # restart: always
+        networks:
+            - gitea
+        volumes:
+            - gitea:/data
+            - /etc/timezone:/etc/timezone:ro
+            - /etc/localtime:/etc/localtime:ro
+        ports:
+            - "3000:3000"
+            - "$SSH_PORT:22"
+        depends_on:
+            - db
+
+    db:
+        image: mysql
+        # restart: always
+        environment:
+            - MYSQL_ROOT_PASSWORD=gitea
+            - MYSQL_USER=gitea
+            - MYSQL_PASSWORD=gitea
+            - MYSQL_DATABASE=gitea
+        networks:
+            - gitea
+        volumes:
+            - db:/var/lib/mysql
+
+volumes:
+    gitea:
+        name: "gitea-data"
+        driver: local
+    db:
+        name: "sql-data"
+        driver: local
+
+# Using this docker-compose configuration we will be deploying two containers which are gitea and mysql
+# In order to make the mysql container accessible from the gitea container we need to specify environment variables with the required details
+# Notice the Host is specified as "GITEA__database__HOST=db:3306" where "db" is the name of the mysql container i.e, if the name of the container is changed the host environment variable must also be updated accordingly
+# All other environment variables are self explanatory where the User name and password needs to be specified for the databse
+# The environment variable "USER_UID=1000" and "USER_GID=100" will have the UID and GID of the current user which can be obtained as shown in the previous step
+# The port parameter "3000:3000" and "2222:22" specifies the port mapping where the left port denotes the host port and the right port denotes the container port
+# For the Port 22 notice that the host port is not 22. This is because the SSH port of the host is also 22. To avoid the clash between the host ssh port and container ssh port we need to specify a different port for this
+# The volume mounts will create two folders "gitea" and "mysql" inside the project folder created previously
+# For these containers a new network called "gitea" will be created and both will be a part of this network
+# Save the file

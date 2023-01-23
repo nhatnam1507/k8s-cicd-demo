@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  chartmuseum:
+    image: bitnami/chartmuseum:latest
+    # restart: always
+    ports:
+      - '6789:8080'
+    volumes:
+      - chartmuseum_data:/bitnami/data
+volumes:
+  chartmuseum_data:
+    driver: local

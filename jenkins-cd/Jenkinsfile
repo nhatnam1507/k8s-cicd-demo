@@ -1,0 +1,156 @@
+def curlTest (url, out) {
+    echo "Running curl on ${url}"
+    def result
+    script {
+        if (out.equals('')) {
+            out = 'http_code'
+        }
+        echo "Getting ${out}"
+            result = sh (
+                returnStdout: true,
+                script: "curl --output /dev/null --silent --connect-timeout 5 --max-time 5 --retry 5 --retry-delay 5 --retry-max-time 30 --write-out \"%{${out}}\" ${url}"
+        )
+        echo "Result (${out}): ${result}"
+        if (!result.equals("200")) {
+            echo result
+            sh "exit 1"
+        }
+    }
+}
+
+def helmCheck(repo_name) {
+    echo "Checking helm..."
+    script {
+        sh 'helm version'
+        sh "helm repo add ${repo_name} http://localhost:6789"
+    }
+}
+
+def kubectlCheck() {
+    echo "Checking kubectl..."
+    script {
+        sh 'kubectl version'
+    }
+}
+
+def helmStatus(DEPLOY_ENVIRONMENT) {
+    sh "helm status --namespace=${DEPLOY_ENVIRONMENT} ${params.SERVICE_NAME}"
+}
+
+def helmDeploy(Map args) {
+    if (args.dry_run) {
+        println "Running dry-run deployment..."
+
+        sh "helm upgrade --dry-run --debug --install ${args.name} ${args.chart_dir} --set image.tag=${args.tag} --namespace=${args.namespace}"
+    } else {
+        println "Running deployment..."
+        sh "helm upgrade --install ${args.name} ${args.chart_dir} --set image.tag=${args.tag} --wait --namespace=${args.namespace}"
+
+        echo "Application ${args.name} successfully deployed!"
+    }
+}
+
+pipeline {
+    agent any
+
+    parameters {
+        string (name:'SERVICE_NAME', defaultValue: '', description:'Service will be installed by helm')
+        string (name:'IMAGE_TAG', defaultValue: '', description:'Service version')
+    }
+
+    environment {
+        HELM_CHART_REPO_NAME='phocr-chart-repo'
+        DEPLOY_ENVIRONMENT='dev'
+    }
+
+    stages {
+        stage('Validation') {
+            steps {
+                kubectlCheck()
+                helmCheck("$HELM_CHART_REPO_NAME")
+                helmDeploy(
+                    dry_run: true,
+                    name: "${params.SERVICE_NAME}",
+                    chart_dir: "${HELM_CHART_REPO_NAME}/${params.SERVICE_NAME}",
+                    tag: "${params.IMAGE_TAG}",
+                    namespace: "$DEPLOY_ENVIRONMENT"
+                )
+            }
+        }
+
+        stage("Deploy to dev environment") {
+            steps {
+                helmDeploy(
+                    dry_run: false,
+                    name: "${params.SERVICE_NAME}",
+                    chart_dir: "${HELM_CHART_REPO_NAME}/${params.SERVICE_NAME}",
+                    tag: "${params.IMAGE_TAG}",
+                    namespace: "$DEPLOY_ENVIRONMENT"
+                )
+                helmStatus("$DEPLOY_ENVIRONMENT")
+            }
+        }
+
+        stage('Service integration test') {
+            steps {
+                script {
+                    def service_ingress = sh (
+                        returnStdout: true,
+                        script: "kubectl get ingress -n $DEPLOY_ENVIRONMENT | grep ${params.SERVICE_NAME} | awk '{printf \$3}'"
+                    )
+                    def endpoint = "${service_ingress}/healthy"
+                    curlTest(endpoint, 'http_code')
+                }
+            }
+        }
+
+        stage('Notification') {
+            steps {
+                script {
+                    mail to: 'nam1.nguyennhat@toshiba.co.jp',
+                        subject: "Job '${JOB_NAME}' (${BUILD_NUMBER}) is waiting for input",
+                        body: "Please go to ${BUILD_URL} and verify the build"
+                }
+            }
+        }
+
+        stage('Get approval from manager') {
+            input {
+                message "Deploy to production?"
+                ok 'Summit'
+                submitter "phocr"
+                parameters {
+                    choice(name: 'DEPLOYMENT_STATUS', choices: ['Approval', 'Reject'], description: 'Deployment status') 
+                }
+            }
+            
+            when {
+                equals expected: 'Approval', actual: "${DEPLOYMENT_STATUS}"
+            }
+        
+            steps {
+                script {
+                    DEPLOY_ENVIRONMENT='prod'
+                }
+            }
+        }
+
+        stage("Deploy to prod environment") {
+            when {
+                equals expected: 'prod', actual: "${DEPLOY_ENVIRONMENT}"
+            }
+
+            steps {
+                helmDeploy(
+                    dry_run: false,
+                    name: "${params.SERVICE_NAME}",
+                    chart_dir: "${HELM_CHART_REPO_NAME}/${params.SERVICE_NAME}",
+                    tag: "${params.IMAGE_TAG}",
+                    namespace: "$DEPLOY_ENVIRONMENT"
+                )
+                helmStatus("$DEPLOY_ENVIRONMENT")
+            }
+        }
+    }
+}
+

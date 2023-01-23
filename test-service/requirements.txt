@@ -1,0 +1,6 @@
+# Python dependencies
+
+# Install Instructions:
+# pip3 install -r requirements.txt
+
+Flask==2.1.0
